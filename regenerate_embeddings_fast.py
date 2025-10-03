@@ -65,7 +65,7 @@ def main():
     cur.execute("""
         SELECT
             product_id_internal,
-            product_name_platform
+            embedding_text
         FROM products
         ORDER BY product_id_internal
     """)
@@ -96,7 +96,7 @@ def main():
 
         # Prepare batch
         product_ids = [p[0] for p in batch]
-        texts = [p[1].upper() if p[1] else "" for p in batch]
+        texts = [p[1] if p[1] else "" for p in batch]  # Use embedding_text as-is (don't uppercase)
 
         # Generate embeddings for entire batch in ONE API call
         embeddings = generate_embeddings_batch(texts)
