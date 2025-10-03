@@ -45,7 +45,7 @@ SUPABASE_CONFIG = {
     'database': os.getenv('SUPABASE_DATABASE'),
     'user': os.getenv('SUPABASE_USER'),
     'password': os.getenv('SUPABASE_PASSWORD'),
-    'port': 5432
+    'port': int(os.getenv('SUPABASE_PORT', '5432'))
 }
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
