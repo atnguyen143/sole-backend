@@ -281,22 +281,55 @@ def insert_to_supabase(inventory_items):
 
 
 def create_index_on_products():
-    """Create index on product_name_platform for faster lookups"""
-    print("\n🔨 Creating index on products.product_name_platform...")
+    """Create indexes on products table for faster lookups"""
+    print("\n🔨 Creating indexes on products table...")
 
     conn = psycopg2.connect(**SUPABASE_CONFIG)
     cur = conn.cursor()
 
-    try:
-        # Create expression index for lowercase matching
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_products_name_lower
-            ON products (LOWER(product_name_platform))
-        """)
-        conn.commit()
-        print("   ✅ Index created successfully\n")
-    except Exception as e:
-        print(f"   ⚠️  Index may already exist or error: {e}\n")
+    # Check product count to determine optimal index parameters
+    cur.execute("SELECT COUNT(*) FROM products WHERE embedding IS NOT NULL")
+    product_count = cur.fetchone()[0]
+
+    # Calculate optimal lists parameter for IVFFlat: sqrt(total_rows)
+    import math
+    lists = max(50, min(2000, int(math.sqrt(product_count))))
+
+    print(f"   📊 Found {product_count:,} products with embeddings")
+    print(f"   🎯 Using lists = {lists} for vector index\n")
+
+    indexes = [
+        {
+            'name': 'idx_products_name_lower',
+            'sql': """
+                CREATE INDEX IF NOT EXISTS idx_products_name_lower
+                ON products (LOWER(product_name_platform))
+            """,
+            'description': 'Name lookup index'
+        },
+        {
+            'name': 'idx_products_embedding',
+            'sql': f"""
+                CREATE INDEX IF NOT EXISTS idx_products_embedding
+                ON products
+                USING ivfflat (embedding vector_cosine_ops)
+                WITH (lists = {lists})
+            """,
+            'description': 'Vector similarity index'
+        }
+    ]
+
+    for idx in indexes:
+        try:
+            print(f"   🔨 Creating {idx['name']}... ({idx['description']})")
+            cur.execute(idx['sql'])
+            conn.commit()
+            print(f"      ✅ Created\n")
+        except Exception as e:
+            if 'already exists' in str(e).lower():
+                print(f"      ⚠️  Already exists, skipping\n")
+            else:
+                print(f"      ❌ Error: {e}\n")
 
     cur.close()
     conn.close()
