@@ -45,8 +45,8 @@ SUPABASE_CONFIG = {
 def normalize_item_name(item_name):
     """
     Normalize item name for matching
-    Example: "Adidas AE 1 All-Star The Future [IF1858]" → "adidas ae 1 all-star the future"
-    REMOVES brackets and style ID for matching (style ID verified separately)
+    Example: "Adidas AE 1 All-Star The Future [IF1858]" → "ADIDAS AE 1 ALL-STAR THE FUTURE"
+    REMOVES brackets and style ID, converts to UPPERCASE to match products table
     """
     if not item_name:
         return None
@@ -54,8 +54,8 @@ def normalize_item_name(item_name):
     # Remove style ID in brackets
     name = re.sub(r'\s*\[.*?\]\s*', '', item_name)
 
-    # Lowercase, strip, normalize spaces
-    name = name.lower().strip()
+    # UPPERCASE, strip, normalize spaces
+    name = name.upper().strip()
     name = re.sub(r'\s+', ' ', name)
 
     return name
@@ -99,11 +99,11 @@ def build_item_to_product_cache(inventory_items):
     stats = {'exact_match': 0, 'no_match': 0, 'multiple_match': 0}
 
     for i, (normalized_name, item_info) in enumerate(unique_items.items(), 1):
-        # Try exact name match first
+        # Try exact name match first (both are now UPPERCASE)
         cur.execute("""
             SELECT product_id_internal, product_name_platform, platform, style_id_platform
             FROM products
-            WHERE LOWER(product_name_platform) = %s
+            WHERE product_name_platform = %s
             LIMIT 5
         """, (normalized_name,))
 
