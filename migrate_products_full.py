@@ -105,6 +105,7 @@ def generate_embedding(text: str, retry_count: int = 3) -> Optional[List[float]]
 # ==================== DATA FETCHING ====================
 
 def fetch_stockx_inventory_subset() -> List[Dict]:
+    migrated_ids = get_migrated_ids('stockx')
     conn = pymysql.connect(**MYSQL_CONFIG)
     cursor = conn.cursor(pymysql.cursors.DictCursor)
     query = """
@@ -122,9 +123,10 @@ def fetch_stockx_inventory_subset() -> List[Dict]:
         print(f"   {results[0].get('title', 'N/A')} | Style ID: {results[0].get('styleId', 'N/A')}")
     cursor.close()
     conn.close()
-    return results
+    return [r for r in results if r['productId'] not in migrated_ids]
 
 def fetch_alias_inventory_subset() -> List[Dict]:
+    migrated_ids = get_migrated_ids('alias')
     conn = pymysql.connect(**MYSQL_CONFIG)
     cursor = conn.cursor(pymysql.cursors.DictCursor)
     query = """
@@ -142,7 +144,7 @@ def fetch_alias_inventory_subset() -> List[Dict]:
         print(f"   {results[0].get('name', 'N/A')} | SKU: {results[0].get('sku', 'N/A')}")
     cursor.close()
     conn.close()
-    return results
+    return [r for r in results if r['catalogId'] not in migrated_ids]
 
 def get_migrated_ids(platform: str) -> set:
     """Get already migrated product IDs from Supabase"""
