@@ -153,8 +153,11 @@ def get_migrated_ids(platform: str) -> set:
         migrated_ids = {row[0] for row in cursor.fetchall()}
         cursor.close()
         conn.close()
+        print(f"   ✅ Found {len(migrated_ids):,} already-migrated {platform} products")
         return migrated_ids
-    except:
+    except Exception as e:
+        print(f"   ⚠️  WARNING: Could not check for migrated {platform} products: {e}")
+        print(f"   ⚠️  Returning empty set - may cause duplicates!")
         return set()
 
 def fetch_stockx_with_style_id_exclude_migrated() -> List[Dict]:
