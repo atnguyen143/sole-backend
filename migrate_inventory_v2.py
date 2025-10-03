@@ -45,16 +45,14 @@ SUPABASE_CONFIG = {
 def normalize_item_name(item_name):
     """
     Normalize item name for matching
-    Example: "Jordan 1 Retro High Pine Green [555088-302]" → "jordan 1 retro high pine green"
+    Example: "Jordan 1 Retro High Pine Green [555088-302]" → "jordan 1 retro high pine green [555088-302]"
+    KEEPS the style ID in brackets for precise matching
     """
     if not item_name:
         return None
 
-    # Remove style ID in brackets
-    name = re.sub(r'\[.*?\]', '', item_name)
-
-    # Lowercase, strip, normalize spaces
-    name = name.lower().strip()
+    # Lowercase, strip, normalize spaces (KEEP brackets and style ID)
+    name = item_name.lower().strip()
     name = re.sub(r'\s+', ' ', name)
 
     return name
@@ -282,10 +280,35 @@ def insert_to_supabase(inventory_items):
     return stats
 
 
+def create_index_on_products():
+    """Create index on product_name_platform for faster lookups"""
+    print("\n🔨 Creating index on products.product_name_platform...")
+
+    conn = psycopg2.connect(**SUPABASE_CONFIG)
+    cur = conn.cursor()
+
+    try:
+        # Create expression index for lowercase matching
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_products_name_lower
+            ON products (LOWER(product_name_platform))
+        """)
+        conn.commit()
+        print("   ✅ Index created successfully\n")
+    except Exception as e:
+        print(f"   ⚠️  Index may already exist or error: {e}\n")
+
+    cur.close()
+    conn.close()
+
+
 def main():
     print("\n" + "="*80)
     print("INVENTORY MIGRATION: MySQL → Supabase (Name-Based Matching)")
     print("="*80)
+
+    # Step 0: Create index for faster matching
+    create_index_on_products()
 
     # Step 1: Fetch inventory from MySQL
     print("\n📦 Fetching inventory from MySQL...")
