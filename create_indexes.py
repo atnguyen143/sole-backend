@@ -31,6 +31,15 @@ def create_indexes():
 
     print("\n🔨 Creating indexes on products table...\n")
 
+    # Increase memory for index creation
+    print("⚙️  Setting maintenance_work_mem to 256MB for index creation...")
+    try:
+        cursor.execute("SET maintenance_work_mem = '256MB'")
+        print("   ✅ Memory limit increased\n")
+    except Exception as e:
+        print(f"   ⚠️  Could not increase memory: {e}")
+        print("   Continuing with default settings...\n")
+
     # Check product count first
     cursor.execute("SELECT COUNT(*) FROM products")
     product_count = cursor.fetchone()[0]
