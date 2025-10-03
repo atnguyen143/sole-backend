@@ -328,6 +328,9 @@ def create_index_on_products():
         except Exception as e:
             if 'already exists' in str(e).lower():
                 print(f"      ⚠️  Already exists, skipping\n")
+            elif 'memory' in str(e).lower():
+                print(f"      ⚠️  Insufficient memory for vector index")
+                print(f"      💡 Run create_indexes.py separately or use Supabase SQL Editor\n")
             else:
                 print(f"      ❌ Error: {e}\n")
 
