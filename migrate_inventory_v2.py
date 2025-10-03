@@ -45,14 +45,17 @@ SUPABASE_CONFIG = {
 def normalize_item_name(item_name):
     """
     Normalize item name for matching
-    Example: "Jordan 1 Retro High Pine Green [555088-302]" → "jordan 1 retro high pine green [555088-302]"
-    KEEPS the style ID in brackets for precise matching
+    Example: "Adidas AE 1 All-Star The Future [IF1858]" → "adidas ae 1 all-star the future"
+    REMOVES brackets and style ID for matching (style ID verified separately)
     """
     if not item_name:
         return None
 
-    # Lowercase, strip, normalize spaces (KEEP brackets and style ID)
-    name = item_name.lower().strip()
+    # Remove style ID in brackets
+    name = re.sub(r'\s*\[.*?\]\s*', '', item_name)
+
+    # Lowercase, strip, normalize spaces
+    name = name.lower().strip()
     name = re.sub(r'\s+', ' ', name)
 
     return name
