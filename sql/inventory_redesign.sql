@@ -116,38 +116,19 @@ SELECT
     poolId, poolKey, comment, updatedVia, saleTrackerRowIndex
 FROM inventory_old;
 
--- Step 4: Create view to display platform-specific product IDs from Supabase
--- This view joins inventory with Supabase products table to show both StockX and Alias IDs
-CREATE OR REPLACE VIEW inventory_with_platform_ids AS
+-- Step 4: Create simplified view for inventory with product references
+-- NOTE: products table is in Supabase (PostgreSQL), NOT in MySQL
+-- Use Python/app layer to join inventory (MySQL) with products (Supabase)
+CREATE OR REPLACE VIEW inventory_with_product_refs AS
 SELECT
     i.*,
-    -- StockX Product Info (from Supabase)
-    p_stockx.product_id_platform AS stockx_product_id_platform,
-    p_stockx.product_name_platform AS stockx_product_name,
-    p_stockx.style_id_platform AS stockx_style_id,
-
-    -- Alias Product Info (from Supabase)
-    p_alias.product_id_platform AS alias_product_id_platform,
-    p_alias.product_name_platform AS alias_product_name,
-    p_alias.style_id_platform AS alias_style_id
-
-FROM inventory i
-
--- Left join to get StockX product details
-LEFT JOIN (
-    -- This would connect to Supabase products table
-    -- For now, using legacy stockx_productId
-    SELECT product_id_internal, product_id_platform, product_name_platform, style_id_platform
-    FROM products  -- This assumes federated query or separate join
-    WHERE platform = 'stockx'
-) p_stockx ON i.product_id_internal = p_stockx.product_id_internal
-
--- Left join to get Alias product details
-LEFT JOIN (
-    SELECT product_id_internal, product_id_platform, product_name_platform, style_id_platform
-    FROM products
-    WHERE platform = 'alias'
-) p_alias ON i.product_id_internal = p_alias.product_id_internal;
+    -- Show which platform this inventory is linked to
+    CASE
+        WHEN i.stockx_productId IS NOT NULL THEN 'stockx'
+        WHEN i.alias_catalog_id IS NOT NULL THEN 'alias'
+        ELSE NULL
+    END AS primary_platform
+FROM inventory i;
 
 -- Step 5: Create helper view for legacy compatibility
 -- Maps old stockx_productId/alias_catalog_id to new structure
