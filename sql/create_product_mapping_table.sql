@@ -18,18 +18,30 @@ CREATE TABLE IF NOT EXISTS product_mapping (
     created_by VARCHAR(100),        -- 'system', 'user_id', 'claude'
 
     -- Constraints
-    UNIQUE(alias_product_id),       -- Each alias can only map to ONE stockx product
-
-    -- Ensure alias_product is actually from alias platform
-    CONSTRAINT check_alias_platform CHECK (
-        (SELECT platform FROM products WHERE product_id_internal = alias_product_id) = 'alias'
-    ),
-
-    -- Ensure stockx_product is actually from stockx platform
-    CONSTRAINT check_stockx_platform CHECK (
-        (SELECT platform FROM products WHERE product_id_internal = stockx_product_id) = 'stockx'
-    )
+    UNIQUE(alias_product_id)        -- Each alias can only map to ONE stockx product
 );
+
+-- Triggers to enforce platform checks (can't use subqueries in CHECK constraints)
+CREATE OR REPLACE FUNCTION validate_product_mapping()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Check alias_product is from alias platform
+    IF (SELECT platform FROM products WHERE product_id_internal = NEW.alias_product_id) != 'alias' THEN
+        RAISE EXCEPTION 'alias_product_id must reference an alias product';
+    END IF;
+
+    -- Check stockx_product is from stockx platform
+    IF (SELECT platform FROM products WHERE product_id_internal = NEW.stockx_product_id) != 'stockx' THEN
+        RAISE EXCEPTION 'stockx_product_id must reference a stockx product';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER validate_product_mapping_trigger
+BEFORE INSERT OR UPDATE ON product_mapping
+FOR EACH ROW EXECUTE FUNCTION validate_product_mapping();
 
 -- Indexes for fast lookups
 CREATE INDEX idx_product_mapping_alias ON product_mapping(alias_product_id);
