@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS product_mapping (
     -- Metadata
     confidence_score DECIMAL(3, 2), -- 0.00 to 1.00 (e.g., 0.95 = 95% match confidence)
     mapping_method VARCHAR(50),     -- 'manual', 'style_id_match', 'embedding_similarity', 'name_match'
+    is_default_alias BOOLEAN DEFAULT FALSE, -- TRUE = this alias is the default for price search
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     created_by VARCHAR(100),        -- 'system', 'user_id', 'claude'
@@ -42,6 +43,26 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER validate_product_mapping_trigger
 BEFORE INSERT OR UPDATE ON product_mapping
 FOR EACH ROW EXECUTE FUNCTION validate_product_mapping();
+
+-- Trigger to ensure only ONE default alias per stockx product
+CREATE OR REPLACE FUNCTION ensure_single_default_alias()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- If setting this as default, unset all other defaults for this stockx product
+    IF NEW.is_default_alias = TRUE THEN
+        UPDATE product_mapping
+        SET is_default_alias = FALSE
+        WHERE stockx_product_id = NEW.stockx_product_id
+          AND alias_product_id != NEW.alias_product_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER ensure_single_default_alias_trigger
+BEFORE INSERT OR UPDATE ON product_mapping
+FOR EACH ROW EXECUTE FUNCTION ensure_single_default_alias();
 
 -- Indexes for fast lookups
 CREATE INDEX idx_product_mapping_alias ON product_mapping(alias_product_id);

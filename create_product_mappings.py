@@ -206,6 +206,43 @@ def show_stats():
     conn.close()
 
 
+def set_default_aliases():
+    """Set default alias for each StockX product (highest confidence match)"""
+    print("\n🎯 Setting default aliases for price search...")
+
+    conn = psycopg2.connect(**SUPABASE_CONFIG)
+    cur = conn.cursor()
+
+    # For each stockx product with mappings, pick the best alias as default
+    cur.execute("""
+        WITH ranked_aliases AS (
+            SELECT
+                mapping_id,
+                stockx_product_id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY stockx_product_id
+                    ORDER BY confidence_score DESC, mapping_id ASC
+                ) as rank
+            FROM product_mapping
+        )
+        UPDATE product_mapping
+        SET is_default_alias = TRUE
+        WHERE mapping_id IN (
+            SELECT mapping_id FROM ranked_aliases WHERE rank = 1
+        )
+    """)
+
+    count = cur.rowcount
+    conn.commit()
+
+    print(f"   ✅ Set {count:,} default aliases")
+
+    cur.close()
+    conn.close()
+
+    return count
+
+
 def main():
     print("\n" + "="*80)
     print("CREATE PRODUCT MAPPINGS: Alias → StockX")
@@ -220,13 +257,17 @@ def main():
     # Step 3: Map by embedding similarity (semantic matches)
     embedding_count = map_by_embedding_similarity(min_similarity=0.85)
 
-    # Step 4: Show stats
+    # Step 4: Set default aliases for price search
+    default_count = set_default_aliases()
+
+    # Step 5: Show stats
     show_stats()
 
     print("\n" + "="*80)
     print("✅ MAPPING COMPLETE")
     print("="*80)
     print(f"\nTotal mapped: {style_id_count + embedding_count:,}")
+    print(f"Default aliases set: {default_count:,}")
     print("\nYou can now query inventory with canonical StockX product info!")
     print("\n")
 
