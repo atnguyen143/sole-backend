@@ -36,31 +36,42 @@ BATCH_SIZE = 500
 
 def clean_embedding_text(text):
     """
-    Clean embedding text - remove special characters
-    Example: "DUNK LOW 'SUMMIT WHITE'" -> "DUNK LOW SUMMIT WHITE"
+    Clean embedding text to match StockX format
+    - Remove single quotes ('), hyphens, underscores
+    - Keep numbers, letters, spaces, parentheses, forward slashes
+    - Expand Wmns → (Women's)
+
+    Examples:
+    - "DD0385 100 Air Max 90 'Cork'" → "DD0385100 Air Max 90 Cork"
+    - "BB6168 UltraBoost 4.0 'Triple White'" → "BB6168 UltraBoost 4.0 Triple White"
+    - "Wmns Air Jordan 11" → "(Women's) Air Jordan 11"
     """
     if not text:
         return text
 
-    # Remove brackets first
-    text = re.sub(r'\s*\[.*?\]\s*', '', text)
-
-    # Keep only letters, spaces, and numbers (for style IDs at start)
-    # Pattern: Keep first word with numbers (style ID), then only letters/spaces
+    # Split into SKU and name parts
     parts = text.split(' ', 1)
+
     if len(parts) == 2:
-        style_id = parts[0]  # Keep style ID as-is
-        product_name = parts[1]
-        # Remove special chars from product name only
-        product_name = re.sub(r"[^A-Za-z0-9 ]", '', product_name)
-        text = f"{style_id} {product_name}"
+        sku_part = parts[0]
+        name_part = parts[1]
+
+        # Expand Wmns in name
+        name_part = re.sub(r'\bWmns\b', "(Women's)", name_part, flags=re.IGNORECASE)
+
+        # Remove single quotes, hyphens, underscores from name
+        name_part = name_part.replace("'", '').replace('-', ' ').replace('_', ' ')
+
+        # Normalize spaces in name
+        name_part = re.sub(r'\s+', ' ', name_part).strip()
+
+        return f"{sku_part} {name_part}"
     else:
-        text = re.sub(r"[^A-Za-z0-9 ]", '', text)
-
-    # Normalize spaces
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    return text
+        # Just name, no SKU
+        text = re.sub(r'\bWmns\b', "(Women's)", text, flags=re.IGNORECASE)
+        text = text.replace("'", '').replace('-', ' ').replace('_', ' ')
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
 
 
 def generate_embeddings_batch(texts, retry_count=3):

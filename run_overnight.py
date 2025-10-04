@@ -51,27 +51,38 @@ def main():
     print("OVERNIGHT MIGRATION RUNNER")
     print("="*80)
     print("\nThis will:")
-    print("  1. Migrate ~282K alias products (~10-15 min, ~$11.30)")
-    print("  2. Create indexes with auto fallbacks (~5 min)")
-    print("\nTotal: ~15-20 minutes, ~$11.30")
+    print("  1. Fix existing 857 alias products (~1 min, ~$0.03)")
+    print("  2. Migrate ~282K new alias products (~10-15 min, ~$11.30)")
+    print("  3. Create indexes with auto fallbacks (~5 min)")
+    print("\nTotal: ~16-21 minutes, ~$11.33")
     print("="*80)
 
     overall_start = time.time()
 
-    # Step 1: Migrate alias products
+    # Step 1: Fix existing alias products
+    success = run_script(
+        "regenerate_alias_embeddings.py",
+        "Fix Existing Alias Products"
+    )
+
+    if not success:
+        print("\n⚠️  Fixing existing products failed, but continuing...")
+
+    # Step 2: Migrate new alias products
     success = run_script(
         "migrate_alias_remaining.py",
-        "Alias Product Migration"
+        "Migrate New Alias Products"
     )
 
     if not success:
         print("\n⚠️  Alias migration failed, stopping pipeline")
         print("You can fix the issue and run the scripts individually:")
+        print("  python regenerate_alias_embeddings.py")
         print("  python migrate_alias_remaining.py")
         print("  python create_indexes_safe.py")
         sys.exit(1)
 
-    # Step 2: Create indexes
+    # Step 3: Create indexes
     success = run_script(
         "create_indexes_safe.py",
         "Index Creation"
