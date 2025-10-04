@@ -39,34 +39,62 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 BATCH_SIZE = 500
 
 
-def clean_text(text):
-    """Remove special characters, keep only letters/numbers/spaces"""
+def normalize_text_for_embedding(text):
+    """
+    Normalize text for embeddings (StockX style)
+    - Remove hyphens and underscores ONLY from the TEXT
+    - Keep forward slashes, apostrophes, parentheses, ALL other chars
+    - Expand abbreviations (Wmns → Women's, GS → (GS), etc.)
+    - Keep original case
+
+    Example: "Air Max 90 'Cork'" → "Air Max 90 'Cork'" (unchanged)
+    Example: "Dunk Low 'Light-Carbon'" → "Dunk Low 'Light Carbon'" (only hyphen removed)
+    Example: "Wmns Air Jordan 11 Retro" → "Women's Air Jordan 11 Retro"
+    """
     if not text:
-        return text
-    # Remove special chars except spaces
-    text = re.sub(r"[^A-Za-z0-9 ]", '', text)
-    # Normalize spaces
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+        return ""
+
+    # Expand abbreviations (case-insensitive replacements)
+    # Wmns → (Women's) - match StockX pattern
+    text = re.sub(r'\bWmns\b', "(Women's)", text, flags=re.IGNORECASE)
+
+    # Only remove - and _ from text body
+    text = text.replace('-', ' ').replace('_', ' ')
+
+    # Normalize multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+
+    return text.strip()
 
 
 def generate_embedding_text_alias(name, sku=None):
     """
-    Generate embedding text for alias products
-    Format: "SKU product name" (cleaned)
-    Example: "DV0833 Nike Dunk Low Retro White Black Panda"
+    Generate embedding text for alias products (MATCH STOCKX FORMAT)
+    Format: "NORMALIZEDSKU product name" (NO SPACE in SKU, keep apostrophes/special chars in name)
+
+    Examples:
+    - sku="DD0385 100", name="Air Max 90 'Cork'" → "DD0385100 Air Max 90 'Cork'"
+    - sku="BB6168", name="UltraBoost 4.0 'Triple White'" → "BB6168 UltraBoost 4.0 'Triple White'"
+    - sku="FJ4188 100", name="Dunk Low SE 'Light-Carbon'" → "FJ4188100 Dunk Low SE 'Light Carbon'"
     """
-    cleaned_name = clean_text(name) if name else ""
+    # Normalize name (remove - and _ but KEEP apostrophes, parentheses, etc.)
+    normalized_name = normalize_text_for_embedding(name) if name else ""
 
     if sku:
-        cleaned_sku = clean_text(sku)
-        return f"{cleaned_sku} {cleaned_name}".strip()
+        # Normalize SKU: remove ALL spaces, dashes, underscores (SKU part only)
+        normalized_sku = sku.replace('-', '').replace('_', '').replace(' ', '')
+        return f"{normalized_sku} {normalized_name}".strip()
 
-    return cleaned_name
+    return normalized_name
 
 
 def normalize_style_id(style_id):
-    """Normalize style ID: remove -, _, spaces, uppercase, strip leading zeros"""
+    """
+    Normalize style ID for storage
+    - Remove -, _, spaces
+    - Uppercase
+    - Strip leading zeros (unless it's just "0")
+    """
     if not style_id or str(style_id).strip() == '':
         return None
 
