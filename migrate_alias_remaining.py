@@ -6,7 +6,7 @@ Migrates ~282K remaining alias products from MySQL to Supabase
 With cleaned embedding text (no special characters)
 
 Estimated cost: ~$11.30
-Estimated time: 10-15 minutes (with batch API)
+Estimated time: ~10 minutes (with batch inserts)
 """
 
 import os
@@ -14,6 +14,7 @@ import re
 import time
 import pymysql
 import psycopg2
+import psycopg2.extras
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -209,62 +210,71 @@ def main():
             stats['failed'] += len(batch)
             continue
 
-        # Insert into products and get product_id_internal
-        product_id_map = {}  # catalogId -> product_id_internal
-
-        for product, embedding_text, embedding in zip(batch, texts, embeddings):
-            try:
-                cur.execute("""
-                    INSERT INTO products (
-                        product_id_platform,
-                        platform,
-                        product_name_platform,
-                        style_id_platform,
-                        style_id_normalized,
-                        embedding_text,
-                        embedding,
-                        keyword_used
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s)
-                    ON CONFLICT (product_id_platform, platform) DO NOTHING
-                    RETURNING product_id_internal
-                """, (
+        # Batch insert into products using execute_values (FAST!)
+        try:
+            values_list = []
+            for product, embedding_text, embedding in zip(batch, texts, embeddings):
+                values_list.append((
                     product['catalogId'],
                     'alias',
-                    (product['name'] or '').upper(),  # Store uppercase
+                    (product['name'] or '').upper(),
                     product['sku'],
                     normalize_style_id(product['sku']),
-                    embedding_text,  # Cleaned text
+                    embedding_text,
                     embedding,
-                    product.get('keywordUsed')  # Include keyword
+                    product.get('keywordUsed')
                 ))
 
-                result = cur.fetchone()
-                if result:
-                    product_id_internal = result[0]
-                    product_id_map[product['catalogId']] = product_id_internal
-                    stats['inserted'] += 1
+            # Batch insert all 500 products in ONE query
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO products (
+                    product_id_platform,
+                    platform,
+                    product_name_platform,
+                    style_id_platform,
+                    style_id_normalized,
+                    embedding_text,
+                    embedding,
+                    keyword_used
+                ) VALUES %s
+                ON CONFLICT (product_id_platform, platform) DO NOTHING
+                """,
+                values_list,
+                template="(%s, %s, %s, %s, %s, %s, %s::vector, %s)"
+            )
 
-            except Exception as e:
-                print(f"   ❌ Insert failed for {product['catalogId']}: {e}")
-                stats['failed'] += 1
+            stats['inserted'] += len(batch)
+            conn.commit()
 
-        # Update inventory table with new product_id_internal links
-        for catalog_id, product_id_internal in product_id_map.items():
-            try:
+            # Update inventory in batch (get product_id_internal for each catalog_id)
+            catalog_ids = [p['catalogId'] for p in batch]
+            cur.execute("""
+                SELECT product_id_platform, product_id_internal
+                FROM products
+                WHERE product_id_platform = ANY(%s) AND platform = 'alias'
+            """, (catalog_ids,))
+
+            id_map = {row[0]: row[1] for row in cur.fetchall()}
+
+            # Batch update inventory
+            for catalog_id, product_id_internal in id_map.items():
                 cur.execute("""
                     UPDATE inventory
                     SET product_id_internal = %s
-                    WHERE alias_catalog_id = %s
-                      AND product_id_internal IS NULL
+                    WHERE alias_catalog_id = %s AND product_id_internal IS NULL
                 """, (product_id_internal, catalog_id))
 
                 if cur.rowcount > 0:
                     stats['inventory_updated'] += cur.rowcount
 
-            except Exception as e:
-                print(f"   ⚠️  Inventory update failed for {catalog_id}: {e}")
+            conn.commit()
 
-        conn.commit()
+        except Exception as e:
+            print(f"   ❌ Batch {batch_start:,}-{batch_end:,} insert failed: {e}")
+            stats['failed'] += len(batch)
+            conn.rollback()
 
         # Progress
         elapsed = time.time() - start_time
