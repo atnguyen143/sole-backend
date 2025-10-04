@@ -42,14 +42,16 @@ BATCH_SIZE = 500
 def normalize_text_for_embedding(text):
     """
     Normalize text for embeddings (StockX style)
-    - Remove hyphens and underscores ONLY from the TEXT
-    - Keep forward slashes, apostrophes, parentheses, ALL other chars
-    - Expand abbreviations (Wmns → Women's, GS → (GS), etc.)
+    - Remove: hyphens, underscores, single quotes (')
+    - Keep: forward slashes, parentheses, apostrophes in contractions
+    - Expand abbreviations (Wmns → (Women's))
     - Keep original case
 
-    Example: "Air Max 90 'Cork'" → "Air Max 90 'Cork'" (unchanged)
-    Example: "Dunk Low 'Light-Carbon'" → "Dunk Low 'Light Carbon'" (only hyphen removed)
-    Example: "Wmns Air Jordan 11 Retro" → "Women's Air Jordan 11 Retro"
+    Examples:
+    - "Air Max 90 'Cork'" → "Air Max 90 Cork" (quotes removed)
+    - "Dunk Low 'Light-Carbon'" → "Dunk Low Light Carbon"
+    - "Wmns Air Jordan 11 Retro" → "(Women's) Air Jordan 11 Retro"
+    - "Nike Air Force 1 '07" → "Nike Air Force 1 07" (year quote removed)
     """
     if not text:
         return ""
@@ -58,8 +60,8 @@ def normalize_text_for_embedding(text):
     # Wmns → (Women's) - match StockX pattern
     text = re.sub(r'\bWmns\b', "(Women's)", text, flags=re.IGNORECASE)
 
-    # Only remove - and _ from text body
-    text = text.replace('-', ' ').replace('_', ' ')
+    # Remove single quotes ('), hyphens, underscores
+    text = text.replace("'", '').replace('-', ' ').replace('_', ' ')
 
     # Normalize multiple spaces
     text = re.sub(r'\s+', ' ', text)
