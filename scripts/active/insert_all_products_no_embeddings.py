@@ -58,16 +58,19 @@ def retry_db_operation(func, max_retries=3, *args, **kwargs):
 
 
 def normalize_text_for_embedding(text):
-    """Normalize text for embeddings (original case preserved)"""
+    """Normalize text for embeddings (lowercase, case insensitive)"""
     if not text:
         return ""
 
     # Expand abbreviations first (before removing parentheses)
-    text = re.sub(r'\bWmns\b', 'Women', text, flags=re.IGNORECASE)
-    text = re.sub(r'\(W\)', 'Women', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bWmns\b', 'women', text, flags=re.IGNORECASE)
+    text = re.sub(r'\(W\)', 'women', text, flags=re.IGNORECASE)
 
     # Remove parentheses, single quotes, hyphens, underscores
     text = text.replace('(', '').replace(')', '').replace("'", '').replace('-', ' ').replace('_', ' ')
+
+    # Lowercase everything for case-insensitive matching
+    text = text.lower()
 
     # Normalize multiple spaces
     text = re.sub(r'\s+', ' ', text)
