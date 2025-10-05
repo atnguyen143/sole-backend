@@ -8,7 +8,7 @@ Uses OpenAI Batch API for 50% cheaper embeddings
 - No rate limits
 
 Process:
-1. Read all products from Supabase (where embedding IS NULL)
+1. Update all products with fresh embedding_text (lowercase, normalized)
 2. Create batch file (JSONL format)
 3. Upload batch to OpenAI
 4. Wait for completion (check status)
@@ -19,9 +19,11 @@ Cost for 461K products: ~$9 (vs $18 sync)
 """
 
 import os
+import re
 import json
 import time
 import psycopg2
+import psycopg2.extras
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -35,6 +37,93 @@ SUPABASE_CONFIG = {
     'password': os.getenv('SUPABASE_PASSWORD'),
     'port': int(os.getenv('SUPABASE_PORT', '5432'))
 }
+
+
+def normalize_text_for_embedding(text):
+    """Normalize text for embeddings (lowercase, case insensitive)"""
+    if not text:
+        return ""
+
+    # Expand abbreviations first (before removing parentheses)
+    text = re.sub(r'\bWmns\b', 'women', text, flags=re.IGNORECASE)
+    text = re.sub(r'\(W\)', 'women', text, flags=re.IGNORECASE)
+
+    # Remove parentheses, single quotes, hyphens, underscores
+    text = text.replace('(', '').replace(')', '').replace("'", '').replace('-', ' ').replace('_', ' ')
+
+    # Lowercase everything for case-insensitive matching
+    text = text.lower()
+
+    # Normalize multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+
+    return text.strip()
+
+
+def generate_embedding_text(name, style_id=None):
+    """
+    Generate embedding text with delimiter (works for both StockX and Alias)
+    Format: "{normalized_style} | {name}" (pipe delimiter separates style from name)
+
+    Examples:
+    - style_id="DD0385-100", name="Air Max 90 'Cork'" → "dd0385100 | air max 90 cork"
+    - style_id="DD0385-100/DD0385-200", name="Air Max 90" → "dd0385100 dd0385200 | air max 90"
+    - No style_id, name="Air Max 90" → "air max 90"
+    """
+    normalized_name = normalize_text_for_embedding(name) if name else ""
+
+    if style_id:
+        # Remove spaces, dashes, underscores first
+        normalized_style = style_id.replace(' ', '').replace('-', '').replace('_', '')
+        # THEN replace slashes with spaces (for multi-SKU products)
+        normalized_style = normalized_style.replace('/', ' ').lower()
+        return f"{normalized_style} | {normalized_name}".strip()
+
+    return normalized_name
+
+
+def update_all_embedding_texts():
+    """Update embedding_text for ALL products with normalized format"""
+    print("\n🔄 Updating embedding_text for all products...")
+
+    conn = psycopg2.connect(**SUPABASE_CONFIG)
+    cur = conn.cursor()
+
+    # Fetch all products
+    cur.execute("""
+        SELECT product_id_internal, product_name_platform, style_id_platform
+        FROM products
+    """)
+
+    products = cur.fetchall()
+    total = len(products)
+    print(f"   ✅ Found {total:,} products to update\n")
+
+    # Update in batches
+    batch_size = 1000
+    updated = 0
+
+    for i in range(0, total, batch_size):
+        batch = products[i:i + batch_size]
+
+        for product_id, name, style_id in batch:
+            embedding_text = generate_embedding_text(name, style_id)
+
+            cur.execute("""
+                UPDATE products
+                SET embedding_text = %s
+                WHERE product_id_internal = %s
+            """, (embedding_text, product_id))
+
+        conn.commit()
+        updated += len(batch)
+        print(f"   Progress: {updated:,}/{total:,} ({updated/total*100:.1f}%)")
+
+    cur.close()
+    conn.close()
+
+    print(f"\n✅ Updated {updated:,} embedding_text values\n")
+    return updated
 
 
 def fetch_products_needing_embeddings(regenerate_all=False):
@@ -236,8 +325,19 @@ def main():
 
         return
 
+    # Update all embedding texts first
+    print("⚠️  This will update ALL embedding_text values to normalized format")
+    print("   (lowercase, case-insensitive, pipe delimiter)")
+    response = input("\nUpdate embedding_text for all products? (y/n): ")
+
+    if response.lower() != 'y':
+        print("❌ Cancelled")
+        return
+
+    update_all_embedding_texts()
+
     # Start new batch
-    print("Start new batch?")
+    print("\nGenerate embeddings for:")
     print("  1 = New embeddings only (NULL embeddings)")
     print("  2 = Regenerate ALL (including existing)")
     response = input("Choice (1/2): ")
