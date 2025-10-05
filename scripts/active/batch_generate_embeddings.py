@@ -325,16 +325,14 @@ def main():
 
         return
 
-    # Update all embedding texts first
-    print("⚠️  This will update ALL embedding_text values to normalized format")
-    print("   (lowercase, case-insensitive, pipe delimiter)")
-    response = input("\nUpdate embedding_text for all products? (y/n): ")
+    # Ask if they want to update embedding_text
+    print("Update embedding_text first?")
+    print("  y = Update all embedding_text (normalized, lowercase)")
+    print("  n = Skip (already updated)")
+    response = input("Choice (y/n): ")
 
-    if response.lower() != 'y':
-        print("❌ Cancelled")
-        return
-
-    update_all_embedding_texts()
+    if response.lower() == 'y':
+        update_all_embedding_texts()
 
     # Start new batch
     print("\nGenerate embeddings for:")
