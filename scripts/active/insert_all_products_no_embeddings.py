@@ -62,9 +62,9 @@ def normalize_text_for_embedding(text):
     if not text:
         return ""
 
-    # Expand abbreviations first (before removing parentheses)
-    text = re.sub(r'\bWmns\b', 'women', text, flags=re.IGNORECASE)
-    text = re.sub(r'\(W\)', 'women', text, flags=re.IGNORECASE)
+    # Expand abbreviations first (before removing punctuation)
+    text = re.sub(r'\bWmns\b', 'womens', text, flags=re.IGNORECASE)
+    text = re.sub(r'\(W\)', 'womens', text, flags=re.IGNORECASE)
 
     # Remove parentheses, single quotes, hyphens, underscores
     text = text.replace('(', '').replace(')', '').replace("'", '').replace('-', ' ').replace('_', ' ')
