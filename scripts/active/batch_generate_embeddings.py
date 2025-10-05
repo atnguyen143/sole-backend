@@ -164,9 +164,10 @@ def fetch_products_needing_embeddings(regenerate_all=False):
     return products
 
 
-def create_batch_file(products, filename='batch_input.jsonl'):
-    """Create JSONL batch file for OpenAI"""
-    print(f"📝 Creating batch file: {filename}")
+def create_batch_file(products, batch_num=1, filename_prefix='batch_input'):
+    """Create JSONL batch file for OpenAI (max 50K products per file)"""
+    filename = f"{filename_prefix}_{batch_num}.jsonl"
+    print(f"📝 Creating batch file {batch_num}: {filename}")
 
     with open(filename, 'w') as f:
         for product_id, embedding_text in products:
@@ -185,9 +186,9 @@ def create_batch_file(products, filename='batch_input.jsonl'):
     return filename
 
 
-def upload_batch(filename):
+def upload_batch(filename, batch_num=1):
     """Upload batch file to OpenAI"""
-    print(f"📤 Uploading {filename} to OpenAI...")
+    print(f"📤 Uploading batch {batch_num}: {filename}...")
 
     with open(filename, 'rb') as f:
         batch_file = client.files.create(
@@ -197,14 +198,14 @@ def upload_batch(filename):
 
     print(f"   ✅ Uploaded: {batch_file.id}\n")
 
-    print("🚀 Creating batch job...")
+    print(f"🚀 Creating batch job {batch_num}...")
     batch = client.batches.create(
         input_file_id=batch_file.id,
         endpoint="/v1/embeddings",
         completion_window="24h"
     )
 
-    print(f"   ✅ Batch created: {batch.id}")
+    print(f"   ✅ Batch {batch_num} created: {batch.id}")
     print(f"   📊 Status: {batch.status}")
     print(f"   ⏱️  Estimated completion: 24 hours\n")
 
@@ -212,7 +213,7 @@ def upload_batch(filename):
 
 
 def check_batch_status(batch_id):
-    """Check status of batch job"""
+    """Check status of batch job - returns ('status', output_file_id or None)"""
     batch = client.batches.retrieve(batch_id)
 
     print(f"\n📊 Batch Status: {batch.status}")
@@ -222,17 +223,24 @@ def check_batch_status(batch_id):
 
     if batch.status == 'completed':
         print(f"   ✅ Output file: {batch.output_file_id}\n")
-        return batch.output_file_id
+        return ('completed', batch.output_file_id)
     elif batch.status == 'failed':
         print(f"   ❌ Batch failed\n")
-        return None
+        return ('failed', None)
     else:
         print(f"   ⏳ Still processing...\n")
-        return None
+        return (batch.status, None)
 
 
 def download_results(output_file_id, filename='batch_output.jsonl'):
-    """Download batch results"""
+    """Download batch results (skip if already downloaded)"""
+
+    # Check if file already exists
+    if os.path.exists(filename):
+        print(f"📥 Results file already exists: {filename}")
+        print(f"   ⏭️  Skipping download\n")
+        return filename
+
     print(f"📥 Downloading results...")
 
     content = client.files.content(output_file_id)
@@ -253,6 +261,8 @@ def update_supabase_with_embeddings(results_file):
 
     updated = 0
     failed = 0
+    batch_updates = []
+    BATCH_SIZE = 5000  # Increased from 1000
 
     with open(results_file, 'r') as f:
         for line in f:
@@ -264,20 +274,40 @@ def update_supabase_with_embeddings(results_file):
 
             product_id = int(result['custom_id'])
             embedding = result['response']['body']['data'][0]['embedding']
+            batch_updates.append((embedding, product_id))
 
-            cur.execute("""
-                UPDATE products
-                SET embedding = %s::vector
-                WHERE product_id_internal = %s
-            """, (embedding, product_id))
-
-            updated += 1
-
-            if updated % 1000 == 0:
+            # Batch update every 5000 records
+            if len(batch_updates) >= BATCH_SIZE:
+                psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    UPDATE products
+                    SET embedding = updates.embedding::vector
+                    FROM (VALUES %s) AS updates(embedding, product_id)
+                    WHERE products.product_id_internal = updates.product_id::integer
+                    """,
+                    batch_updates
+                )
                 conn.commit()
+                updated += len(batch_updates)
                 print(f"   Progress: {updated:,} updated")
+                batch_updates = []
 
-    conn.commit()
+    # Insert remaining records
+    if batch_updates:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            UPDATE products
+            SET embedding = updates.embedding::vector
+            FROM (VALUES %s) AS updates(embedding, product_id)
+            WHERE products.product_id_internal = updates.product_id::integer
+            """,
+            batch_updates
+        )
+        conn.commit()
+        updated += len(batch_updates)
+
     cur.close()
     conn.close()
 
@@ -294,34 +324,147 @@ def main():
 
     print("\n📋 This script will:")
     print("1. Fetch products needing embeddings")
-    print("2. Create batch file")
-    print("3. Upload to OpenAI Batch API")
+    print("2. Split into multiple batches (50K limit per batch)")
+    print("3. Upload all batches to OpenAI Batch API")
     print("4. Wait for completion (up to 24 hours)")
     print("5. Download and update Supabase")
     print("\n💰 Cost: 50% cheaper than sync API")
     print("⏱️  Time: Up to 24 hours")
     print("\n" + "="*80 + "\n")
 
-    # Check if we're resuming from a previous batch
-    if os.path.exists('batch_id.txt'):
-        with open('batch_id.txt', 'r') as f:
-            batch_id = f.read().strip()
+    # Check if we're resuming from previous batches
+    if os.path.exists('batch_ids.json'):
+        with open('batch_ids.json', 'r') as f:
+            batch_data = json.load(f)
+            batch_ids = batch_data['batch_ids']
+            total_batches = batch_data['total_batches']
 
-        print(f"🔄 Found existing batch ID: {batch_id}")
-        print("   Checking status...\n")
+        print(f"🔄 Found {len(batch_ids)} existing batch IDs")
+        print("   Checking status of all batches...\n")
 
-        output_file_id = check_batch_status(batch_id)
+        all_completed = True
+        output_files = []
+        failed_batches = []
 
-        if output_file_id:
-            # Download and process results
-            results_file = download_results(output_file_id)
-            update_supabase_with_embeddings(results_file)
+        for i, batch_id in enumerate(batch_ids, 1):
+            print(f"📊 Batch {i}/{total_batches}: {batch_id}")
+            status, output_file_id = check_batch_status(batch_id)
+
+            if status == 'completed':
+                output_files.append((i, output_file_id))
+            elif status == 'failed':
+                failed_batches.append(i)
+                all_completed = False
+            else:
+                all_completed = False
+
+        # Show summary
+        print(f"\n{'='*80}")
+        print("BATCH STATUS SUMMARY")
+        print(f"{'='*80}")
+        print(f"✅ Completed: {len(output_files)}/{total_batches}")
+        print(f"❌ Failed: {len(failed_batches)}/{total_batches}")
+        print(f"⏳ Processing: {total_batches - len(output_files) - len(failed_batches)}/{total_batches}")
+
+        if failed_batches:
+            print(f"\n❌ Failed batch numbers: {failed_batches}")
+            print(f"\n🔧 Want to resubmit failed batches?")
+            print(f"   y = Resubmit {len(failed_batches)} failed batches now")
+            print(f"   n = Skip (check again later)")
+            response = input("Choice (y/n): ")
+
+            if response.lower() == 'y':
+                # Fetch products for failed batches
+                products = fetch_products_needing_embeddings(regenerate_all=False)
+
+                if not products:
+                    print("✅ No products need embeddings!")
+                    return
+
+                BATCH_SIZE_LIMIT = 50000
+                new_batch_ids = []
+
+                # Resubmit only failed batches
+                for batch_num in failed_batches:
+                    start_idx = (batch_num - 1) * BATCH_SIZE_LIMIT
+                    end_idx = min(batch_num * BATCH_SIZE_LIMIT, len(products))
+
+                    if start_idx >= len(products):
+                        print(f"⚠️  Batch {batch_num} out of range, skipping")
+                        continue
+
+                    batch_products = products[start_idx:end_idx]
+
+                    print(f"\n{'='*80}")
+                    print(f"Resubmitting Batch {batch_num}/{total_batches}")
+                    print(f"Products: {start_idx:,} to {end_idx:,} ({len(batch_products):,} items)")
+                    print(f"{'='*80}\n")
+
+                    # Create batch file
+                    batch_file = create_batch_file(batch_products, batch_num=batch_num)
+
+                    # Upload to OpenAI
+                    new_batch_id = upload_batch(batch_file, batch_num=batch_num)
+                    new_batch_ids.append(new_batch_id)
+
+                    # Update batch_ids.json with new ID
+                    batch_ids[batch_num - 1] = new_batch_id
+
+                    # Add 20 min delay before last failed batch (if multiple)
+                    if len(failed_batches) > 1 and batch_num == failed_batches[-2]:
+                        print(f"\n⏰ Waiting 20 minutes before submitting final failed batch...")
+                        print(f"   Started at: {time.strftime('%I:%M:%S %p')}")
+
+                        for remaining in range(1200, 0, -60):
+                            mins = remaining // 60
+                            print(f"   ⏳ {mins} minutes remaining...", end='\r')
+                            time.sleep(60)
+
+                        print(f"\n   ✅ Wait complete! Submitting final batch...")
+                        print(f"   Current time: {time.strftime('%I:%M:%S %p')}\n")
+
+                # Save updated batch IDs
+                with open('batch_ids.json', 'w') as f:
+                    json.dump({
+                        'batch_ids': batch_ids,
+                        'total_batches': total_batches
+                    }, f, indent=2)
+
+                print(f"\n✅ Resubmitted {len(new_batch_ids)} failed batches!")
+                print(f"💾 Updated batch_ids.json\n")
+                return
+
+        if all_completed and len(output_files) == len(batch_ids):
+            # Download and process all results
+            print(f"\n✅ All {total_batches} batches completed! Downloading results...\n")
+
+            all_results = []
+            for batch_num, output_file_id in output_files:
+                results_file = download_results(output_file_id, filename=f'batch_output_{batch_num}.jsonl')
+                all_results.append(results_file)
+
+            # Update Supabase with all results
+            total_updated = 0
+            total_failed = 0
+
+            for results_file in all_results:
+                updated, failed = update_supabase_with_embeddings(results_file)
+                total_updated += updated
+                total_failed += failed
+
+            print(f"\n{'='*80}")
+            print("FINAL RESULTS - ALL BATCHES")
+            print(f"{'='*80}")
+            print(f"✅ Total updated: {total_updated:,}")
+            print(f"❌ Total failed: {total_failed:,}")
+            print(f"📊 Batches processed: {total_batches}")
 
             # Cleanup
-            os.remove('batch_id.txt')
-            print("✅ Batch processing complete!\n")
+
+
+            print("\n✅ All batch processing complete!\n")
         else:
-            print("⏳ Batch still processing. Run this script again later to check status.\n")
+            print(f"\n⏳ Run this script again later to check status.\n")
 
         return
 
@@ -353,12 +496,17 @@ def main():
         print("✅ No products need embeddings!")
         return
 
+    # Calculate number of batches needed (50K limit per batch)
+    BATCH_SIZE_LIMIT = 50000
+    num_batches = (len(products) + BATCH_SIZE_LIMIT - 1) // BATCH_SIZE_LIMIT
+
     # Estimate cost
     total_tokens = len(products) * 10  # ~10 tokens per product
     cost = total_tokens / 1_000_000 * 0.01  # $0.01 per 1M tokens
 
     print(f"💰 Estimated cost: ${cost:.2f}")
     print(f"📊 Total products: {len(products):,}")
+    print(f"📦 Number of batches: {num_batches}")
     print(f"⏱️  Estimated time: 24 hours max\n")
 
     response = input("Continue? (y/n): ")
@@ -366,18 +514,53 @@ def main():
         print("❌ Cancelled")
         return
 
-    # Create batch file
-    batch_file = create_batch_file(products)
+    # Split products into batches and upload each
+    batch_ids = []
 
-    # Upload to OpenAI
-    batch_id = upload_batch(batch_file)
+    for i in range(num_batches):
+        start_idx = i * BATCH_SIZE_LIMIT
+        end_idx = min((i + 1) * BATCH_SIZE_LIMIT, len(products))
+        batch_products = products[start_idx:end_idx]
 
-    # Save batch ID for later
-    with open('batch_id.txt', 'w') as f:
-        f.write(batch_id)
+        print(f"\n{'='*80}")
+        print(f"Processing Batch {i+1}/{num_batches}")
+        print(f"Products: {start_idx:,} to {end_idx:,} ({len(batch_products):,} items)")
+        print(f"{'='*80}\n")
 
-    print("💡 Batch submitted! Run this script again later to check status and download results.")
-    print(f"   Batch ID saved to: batch_id.txt\n")
+        # Create batch file
+        batch_file = create_batch_file(batch_products, batch_num=i+1)
+
+        # Upload to OpenAI
+        batch_id = upload_batch(batch_file, batch_num=i+1)
+        batch_ids.append(batch_id)
+
+        # Add 20 min delay before last batch (to avoid queue limit)
+        if i == num_batches - 2:  # Second to last batch
+            print(f"\n⏰ Waiting 20 minutes before submitting final batch...")
+            print(f"   This prevents hitting the 3M token queue limit")
+            print(f"   Started at: {time.strftime('%I:%M:%S %p')}")
+
+            for remaining in range(1200, 0, -60):  # 20 min = 1200 seconds
+                mins = remaining // 60
+                print(f"   ⏳ {mins} minutes remaining...", end='\r')
+                time.sleep(60)
+
+            print(f"\n   ✅ Wait complete! Submitting final batch...")
+            print(f"   Current time: {time.strftime('%I:%M:%S %p')}\n")
+
+    # Save all batch IDs for later
+    with open('batch_ids.json', 'w') as f:
+        json.dump({
+            'batch_ids': batch_ids,
+            'total_batches': num_batches
+        }, f, indent=2)
+
+    print(f"\n{'='*80}")
+    print(f"✅ All {num_batches} batches submitted!")
+    print(f"{'='*80}")
+    print(f"📊 Total batch IDs: {len(batch_ids)}")
+    print(f"💾 Saved to: batch_ids.json")
+    print(f"\n💡 Run this script again later to check status and download results.\n")
 
 
 if __name__ == "__main__":
