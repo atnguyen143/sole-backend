@@ -48,13 +48,18 @@ def main():
     print(f"\n[2/5] Calculating optimal settings...")
     print(f"      ✅ Optimal lists: {optimal_lists}")
 
-    # Configs to try
+    # Configs to try - CONSERVATIVE for 1GB RAM instances
+    # With only ~500MB available, we need VERY small settings
     configs = [
-        ('2GB', optimal_lists),
-        ('1GB', optimal_lists),
-        ('512MB', optimal_lists),
-        ('256MB', optimal_lists // 2),
+        ('64MB', 20),   # Absolute minimum - should work on any instance
+        ('96MB', 30),   # Still very conservative
+        ('128MB', 50),  # Slightly better performance
+        ('256MB', optimal_lists // 4),  # If more memory available
+        ('512MB', optimal_lists // 2),  # Unlikely to work on 1GB instance
     ]
+
+    print(f"\n      💡 Your instance has limited memory (~500MB available)")
+    print(f"      💡 Using very conservative settings to avoid failures")
 
     print(f"\n[3/5] Checking if index already exists...")
     cur.execute("""
