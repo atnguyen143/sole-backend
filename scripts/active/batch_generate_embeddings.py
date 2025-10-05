@@ -37,19 +37,35 @@ SUPABASE_CONFIG = {
 }
 
 
-def fetch_products_needing_embeddings():
-    """Fetch all products with NULL embeddings"""
+def fetch_products_needing_embeddings(regenerate_all=False):
+    """
+    Fetch products needing embeddings
+
+    Args:
+        regenerate_all: If True, fetch ALL products (regenerate embeddings)
+                       If False, only fetch products with NULL embeddings
+    """
     print("\n📦 Fetching products needing embeddings...")
 
     conn = psycopg2.connect(**SUPABASE_CONFIG)
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT product_id_internal, embedding_text
-        FROM products
-        WHERE embedding IS NULL AND embedding_text IS NOT NULL
-        ORDER BY product_id_internal
-    """)
+    if regenerate_all:
+        print("   🔄 Mode: REGENERATE ALL (including existing embeddings)\n")
+        cur.execute("""
+            SELECT product_id_internal, embedding_text
+            FROM products
+            WHERE embedding_text IS NOT NULL
+            ORDER BY product_id_internal
+        """)
+    else:
+        print("   ➕ Mode: NEW ONLY (NULL embeddings)\n")
+        cur.execute("""
+            SELECT product_id_internal, embedding_text
+            FROM products
+            WHERE embedding IS NULL AND embedding_text IS NOT NULL
+            ORDER BY product_id_internal
+        """)
 
     products = cur.fetchall()
     cur.close()
@@ -221,13 +237,19 @@ def main():
         return
 
     # Start new batch
-    response = input("Start new batch? (y/n): ")
-    if response.lower() != 'y':
+    print("Start new batch?")
+    print("  1 = New embeddings only (NULL embeddings)")
+    print("  2 = Regenerate ALL (including existing)")
+    response = input("Choice (1/2): ")
+
+    if response not in ['1', '2']:
         print("❌ Cancelled")
         return
 
+    regenerate_all = (response == '2')
+
     # Fetch products
-    products = fetch_products_needing_embeddings()
+    products = fetch_products_needing_embeddings(regenerate_all=regenerate_all)
 
     if not products:
         print("✅ No products need embeddings!")
