@@ -15,6 +15,7 @@ Cost: $0 (no API calls)
 
 import os
 import re
+import time
 import pymysql
 import psycopg2
 import psycopg2.extras
@@ -38,6 +39,22 @@ SUPABASE_CONFIG = {
 }
 
 BATCH_SIZE = 1000  # Even bigger batches since no API calls
+
+
+def retry_db_operation(func, max_retries=3, *args, **kwargs):
+    """Retry database operations with exponential backoff"""
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"   ⚠️  DB error (attempt {attempt + 1}/{max_retries}): {e}")
+                print(f"   ⏳ Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise
+    return None
 
 
 def normalize_text_for_embedding(text):
@@ -144,29 +161,33 @@ def insert_stockx():
                 None  # NO embedding
             ))
 
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO products (
-                product_id_platform,
-                platform,
-                product_name_platform,
-                style_id_platform,
-                style_id_normalized,
-                embedding_text,
-                embedding
-            ) VALUES %s
-            ON CONFLICT (product_id_platform, platform)
-            DO UPDATE SET
-                embedding_text = EXCLUDED.embedding_text,
-                embedding = NULL
-            """,
-            values_list,
-            template="(%s, %s, %s, %s, %s, %s, %s::vector)"
-        )
+        # Retry DB operation with exponential backoff
+        def insert_batch():
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO products (
+                    product_id_platform,
+                    platform,
+                    product_name_platform,
+                    style_id_platform,
+                    style_id_normalized,
+                    embedding_text,
+                    embedding
+                ) VALUES %s
+                ON CONFLICT (product_id_platform, platform)
+                DO UPDATE SET
+                    embedding_text = EXCLUDED.embedding_text,
+                    embedding = NULL
+                """,
+                values_list,
+                template="(%s, %s, %s, %s, %s, %s, %s::vector)"
+            )
+            conn.commit()
+
+        retry_db_operation(insert_batch)
 
         inserted += len(batch)
-        conn.commit()
         print(f"   {inserted:,}/{total:,} ({inserted/total*100:.1f}%)")
 
     cur.close()
@@ -217,30 +238,34 @@ def insert_alias():
                 p.get('keywordUsed')
             ))
 
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO products (
-                product_id_platform,
-                platform,
-                product_name_platform,
-                style_id_platform,
-                style_id_normalized,
-                embedding_text,
-                embedding,
-                keyword_used
-            ) VALUES %s
-            ON CONFLICT (product_id_platform, platform)
-            DO UPDATE SET
-                embedding_text = EXCLUDED.embedding_text,
-                embedding = NULL
-            """,
-            values_list,
-            template="(%s, %s, %s, %s, %s, %s, %s::vector, %s)"
-        )
+        # Retry DB operation with exponential backoff
+        def insert_batch():
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO products (
+                    product_id_platform,
+                    platform,
+                    product_name_platform,
+                    style_id_platform,
+                    style_id_normalized,
+                    embedding_text,
+                    embedding,
+                    keyword_used
+                ) VALUES %s
+                ON CONFLICT (product_id_platform, platform)
+                DO UPDATE SET
+                    embedding_text = EXCLUDED.embedding_text,
+                    embedding = NULL
+                """,
+                values_list,
+                template="(%s, %s, %s, %s, %s, %s, %s::vector, %s)"
+            )
+            conn.commit()
+
+        retry_db_operation(insert_batch)
 
         inserted += len(batch)
-        conn.commit()
         print(f"   {inserted:,}/{total:,} ({inserted/total*100:.1f}%)")
 
     cur.close()
